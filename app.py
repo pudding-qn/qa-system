@@ -1,10 +1,4 @@
 # -*- coding=utf-8 -*-
-# @Time: 2025/10/22 15:14
-# @Author: 邱楠
-# @File: app.py.py
-# @Software: PyCharm
-
-
 import streamlit as st
 import os
 import sys
@@ -50,36 +44,48 @@ st.markdown("""
         display: inline-block;
         margin-bottom: 0.5rem;
     }
-    .question-text {
-        font-size: 1.1rem;
-        font-weight: bold;
-        color: #333;
-        margin-bottom: 0.5rem;
-    }
-    .answer-text {
-        background-color: white;
-        padding: 1rem;
-        border-radius: 5px;
-        border: 1px solid #ddd;
-        margin: 0.5rem 0;
-    }
-    .metadata {
-        font-size: 0.9rem;
-        color: #666;
-        margin-top: 0.5rem;
-    }
 </style>
 """, unsafe_allow_html=True)
 
+def check_dependencies():
+    """检查依赖是否安装"""
+    missing_deps = []
+    try:
+        import sentence_transformers
+    except ImportError:
+        missing_deps.append("sentence-transformers")
+    
+    try:
+        import chromadb
+    except ImportError:
+        missing_deps.append("chromadb")
+    
+    try:
+        import torch
+    except ImportError:
+        missing_deps.append("torch")
+    
+    return missing_deps
+
+# 检查依赖
+missing_deps = check_dependencies()
+if missing_deps:
+    st.error(f"❌ 缺少必要的依赖: {', '.join(missing_deps)}")
+    st.info("请在 requirements.txt 中添加以上依赖包")
 
 # 使用缓存加载系统，避免重复初始化
 @st.cache_resource(show_spinner="正在加载智能问答系统...")
 def load_qa_system():
     """加载QA系统"""
     try:
+        # 检查依赖
+        missing_deps = check_dependencies()
+        if missing_deps:
+            raise ImportError(f"缺少依赖: {', '.join(missing_deps)}")
+        
         # 延迟导入，避免在缓存时加载
         from vector_db_query import VectorDBQuery
-
+        
         system = VectorDBQuery(
             use_semantic_analysis=True,
             spark_appid="17fd554e",
@@ -87,10 +93,18 @@ def load_qa_system():
             spark_apisecret="YzQwOWQ4M2U3NzM2ODYzYzE3ODI0M2M0"
         )
         return system
-    except Exception as e:
-        st.error(f"系统初始化失败: {str(e)}")
+    except ImportError as e:
+        st.error(f"❌ 依赖导入失败: {str(e)}")
+        st.info("""
+        **解决方案：**
+        1. 检查 requirements.txt 是否包含所有必要依赖
+        2. 确保 sentence-transformers, chromadb, torch 等包已正确安装
+        3. 重新部署应用
+        """)
         return None
-
+    except Exception as e:
+        st.error(f"❌ 系统初始化失败: {str(e)}")
+        return None
 
 def execute_query(query_system, question, top_k, min_score, use_semantic):
     """执行查询并返回结果"""
@@ -107,7 +121,6 @@ def execute_query(query_system, question, top_k, min_score, use_semantic):
             return results, query_time, None
         except Exception as e:
             return None, 0, str(e)
-
 
 def convert_to_csv(df):
     """将DataFrame转换为CSV格式，解决中文乱码问题"""
@@ -126,7 +139,6 @@ def convert_to_csv(df):
             df.to_csv(output, index=False, encoding='utf-8')
             return output.getvalue()
 
-
 def display_results(results: List[Dict], query_time: float, query_question: str):
     """显示查询结果"""
     if not results:
@@ -141,63 +153,16 @@ def display_results(results: List[Dict], query_time: float, query_question: str)
             st.markdown(f"""
             <div class="result-card">
                 <div class="similarity-score">相似度: {result.get('score', 0):.4f}</div>
-                <div class="question-text">📝 问题: {result.get('question', '')}</div>
-                <div class="answer-text">💡 答案: {result.get('standard_answer', '')}</div>
-                <div class="metadata">
+                <div style="font-weight: bold; margin-bottom: 0.5rem;">📝 问题: {result.get('question', '')}</div>
+                <div style="background: white; padding: 1rem; border-radius: 5px; margin: 0.5rem 0;">
+                    💡 答案: {result.get('standard_answer', '')}
+                </div>
+                <div style="color: #666; font-size: 0.9rem;">
                     🏷️ 分类: {result.get('header', '')} | 
-                    📁 来源: {result.get('file_source', '')} |
-                    🔗 图片: {result.get('image_url', '无')}
+                    📁 来源: {result.get('file_source', '')}
                 </div>
             </div>
             """, unsafe_allow_html=True)
-
-    with st.expander("📋 查看详细数据"):
-        results_df = pd.DataFrame(results)
-        if not results_df.empty:
-            display_columns = ['file_source', 'raw_content', 'question', 'standard_answer', 'score', 'header']
-            available_columns = [col for col in display_columns if col in results_df.columns]
-            results_df = results_df[available_columns]
-
-            styled_df = results_df.style.format({'score': '{:.4f}'})
-            st.dataframe(styled_df, use_container_width=True)
-
-            st.markdown("---")
-            col1, col2, col3 = st.columns(3)
-
-            with col1:
-                csv_data = convert_to_csv(results_df)
-                st.download_button(
-                    label="📥 下载CSV",
-                    data=csv_data,
-                    file_name=f"查询结果_{time.strftime('%Y%m%d_%H%M%S')}.csv",
-                    mime="text/csv"
-                )
-
-            with col2:
-                try:
-                    excel_buffer = io.BytesIO()
-                    with pd.ExcelWriter(excel_buffer, engine='openpyxl') as writer:
-                        results_df.to_excel(writer, index=False, sheet_name='查询结果')
-                    excel_data = excel_buffer.getvalue()
-
-                    st.download_button(
-                        label="📊 下载Excel",
-                        data=excel_data,
-                        file_name=f"查询结果_{time.strftime('%Y%m%d_%H%M%S')}.xlsx",
-                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                    )
-                except Exception as e:
-                    st.error(f"Excel导出失败: {e}")
-
-            with col3:
-                json_data = results_df.to_json(force_ascii=False, orient='records', indent=2)
-                st.download_button(
-                    label="📄 下载JSON",
-                    data=json_data,
-                    file_name=f"查询结果_{time.strftime('%Y%m%d_%H%M%S')}.json",
-                    mime="application/json"
-                )
-
 
 def main():
     """主函数"""
@@ -217,11 +182,33 @@ def main():
     if 'current_query_question' not in st.session_state:
         st.session_state.current_query_question = ""
 
+    st.markdown('<div class="main-header">🤖 智能问答系统</div>', unsafe_allow_html=True)
+
     # 加载系统
     query_system = load_qa_system()
 
     if query_system is None:
-        st.error("❌ 系统加载失败，请检查配置")
+        st.error("""
+        ## ❌ 系统初始化失败
+        
+        **可能的原因：**
+        1. 缺少必要的Python包
+        2. 向量数据库文件不存在
+        3. 内存不足
+        
+        **解决方案：**
+        1. 检查 requirements.txt 文件
+        2. 确保 vector_db 文件夹已上传
+        3. 查看Streamlit Cloud的日志获取详细信息
+        """)
+        
+        # 显示依赖检查
+        with st.expander("🔧 依赖检查"):
+            missing = check_dependencies()
+            if missing:
+                st.error(f"缺少依赖: {', '.join(missing)}")
+            else:
+                st.success("所有依赖已安装")
         return
 
     # 显示系统状态
@@ -230,8 +217,6 @@ def main():
         st.success(f"✅ 系统加载完成！向量数据库中共有 **{count}** 个问答对")
     except:
         st.warning("⚠️ 无法获取数据库统计信息")
-
-    st.markdown('<div class="main-header">🤖 智能问答系统</div>', unsafe_allow_html=True)
 
     # 查询表单
     with st.form("query_form"):
@@ -323,17 +308,6 @@ def main():
                 st.session_state.example_question = example
                 st.session_state.current_results = None
                 st.rerun()
-
-        with st.expander("⚙️ 当前查询参数"):
-            st.write(f"返回结果数量: {top_k}")
-            st.write(f"相似度阈值: {min_score}")
-            st.write(f"语义分析: {'启用' if use_semantic else '禁用'}")
-
-        st.header("🚀 快速操作")
-        if st.button("🔄 重新加载系统", use_container_width=True):
-            st.cache_resource.clear()
-            st.rerun()
-
 
 if __name__ == "__main__":
     main()
